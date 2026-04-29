@@ -5,9 +5,9 @@ import {
   useQuery,
 } from "convex/react";
 import type { GenericId } from "convex/values";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PlaybackExports } from "./PlaybackExports";
-import type { QualityPreset } from "./recording/presets";
+import type { PointerTool, QualityPreset } from "./recording/presets";
 import {
   recordingEnvironmentHint,
   useScreenRecorder,
@@ -52,16 +52,9 @@ function StandaloneShell({ convex = false }: { convex?: boolean }) {
         <h1 className="brand">Screen capture</h1>
         <p className="subtitle">
           Choose what to share (screen, window, or tab) first; optional countdown runs after that, then
-          encoding. Quality presets, webcam PiP, pause, and trim / MP4 export run in your browser.
+          encoding. Pointer tools (laser, spotlight, click ripples), webcam PiP, pause, trim / MP4 export.
         </p>
       </header>
-
-      {!convex && (
-        <p className="hint-box">
-          Convex is optional — add <code>VITE_CONVEX_URL</code> in <code>.env.local</code> and{" "}
-          <code>npx convex dev</code> to sync cloud saves and JPEG thumbnails.
-        </p>
-      )}
 
       <main className="main">
         <RecorderPanel convex={convex} />
@@ -74,6 +67,8 @@ function StandaloneShell({ convex = false }: { convex?: boolean }) {
 function RecorderPanel({ convex }: { convex: boolean }) {
   const {
     state,
+    webcamBubbleStream,
+    compositeLivePreview,
     start,
     stop,
     discard,
@@ -85,6 +80,7 @@ function RecorderPanel({ convex }: { convex: boolean }) {
   const [quality, setQuality] = useState<QualityPreset>("balanced");
   const [countdownSec, setCountdownSec] = useState(0);
   const [webcamPip, setWebcamPip] = useState(false);
+  const [pointerTool, setPointerTool] = useState<PointerTool>("none");
 
   const envHint = useMemo(() => recordingEnvironmentHint(), []);
 
@@ -129,8 +125,19 @@ function RecorderPanel({ convex }: { convex: boolean }) {
     };
   }, [state]);
 
+  const capturing =
+    state.status === "countdown" || state.status === "recording";
+  /** PiP webcam in composite preview — hide raw webcam bubble when compositor feeds live preview */
+  const bubbleVisible =
+    Boolean(webcamBubbleStream) &&
+    capturing &&
+    compositeLivePreview == null;
+
   return (
-    <section className="card recorder-card" aria-labelledby="rec-title">
+    <>
+      <CompositeEncodePreview stream={compositeLivePreview} active={capturing} />
+      <WebcamBubbleOverlay stream={bubbleVisible ? webcamBubbleStream : null} />
+      <section className="card recorder-card" aria-labelledby="rec-title">
       <h2 id="rec-title">Capture</h2>
 
       {envHint ? (
@@ -161,6 +168,18 @@ function RecorderPanel({ convex }: { convex: boolean }) {
               <option value={0}>None (start immediately)</option>
               <option value={3}>3 seconds after picker</option>
               <option value={5}>5 seconds after picker</option>
+            </select>
+          </label>
+          <label className="field inline">
+            <span>Pointer tools</span>
+            <select
+              value={pointerTool}
+              onChange={(e) => setPointerTool(e.target.value as PointerTool)}
+            >
+              <option value="none">Off</option>
+              <option value="laser">Laser</option>
+              <option value="spotlight">Spotlight</option>
+              <option value="ripple">Click ripples</option>
             </select>
           </label>
           <label className="toggle">
@@ -210,7 +229,7 @@ function RecorderPanel({ convex }: { convex: boolean }) {
       )}
 
       {state.status === "idle" || state.status === "error" ? (
-        <button type="button" className="btn primary" onClick={() => void start({ quality, webcamPip, countdownSeconds: countdownSec })}>
+        <button type="button" className="btn primary" onClick={() => void start({ quality, webcamPip, countdownSeconds: countdownSec, pointerTool })}>
           Start recording
         </button>
       ) : null}
@@ -242,28 +261,15 @@ function RecorderPanel({ convex }: { convex: boolean }) {
         </div>
       ) : null}
 
-      {state.status === "stopped" && (
-        <>
-          <div className="preview-row">
-            <video
-              src={downloadHref}
-              poster={posterUrl ?? undefined}
-              controls
-              playsInline
-              className="preview-video"
-            />
-            <div className="actions">
-              <a href={downloadHref} download={downloadName} className="btn primary">
-                Download WebM
-              </a>
-              <button type="button" className="btn ghost" onClick={discard}>
-                Discard
-              </button>
-            </div>
-          </div>
-          <PlaybackExports blob={state.blob} />
-        </>
-      )}
+      {state.status === "stopped" && downloadHref ? (
+        <PlaybackExports
+          blob={state.blob}
+          previewSrc={downloadHref}
+          posterUrl={posterUrl ?? undefined}
+          downloadName={downloadName}
+          onDiscard={discard}
+        />
+      ) : null}
 
       {state.status === "stopped" && convex ? (
         <ConvexUploadEmbedded
@@ -272,6 +278,85 @@ function RecorderPanel({ convex }: { convex: boolean }) {
         />
       ) : null}
     </section>
+    </>
+  );
+}
+
+/** Live-encoded compositor preview — same pixels as recording (muted for autoplay) */
+function CompositeEncodePreview({
+  stream,
+  active,
+}: {
+  stream: MediaStream | null;
+  active: boolean;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !stream || !active) {
+      if (el) el.srcObject = null;
+      return undefined;
+    }
+    el.srcObject = stream;
+    void el.play().catch(() => undefined);
+    return () => {
+      el.srcObject = null;
+    };
+  }, [stream, active]);
+
+  if (!stream || !active) return null;
+
+  return (
+    <div
+      className="composite-encode-preview"
+      title="Muted live preview — same image as encoded (not an extra overlay)"
+      role="presentation"
+    >
+      <video
+        ref={ref}
+        className="composite-encode-preview__video"
+        autoPlay
+        muted
+        playsInline
+      />
+      <span className="composite-encode-preview__label">Encoding preview</span>
+    </div>
+  );
+}
+
+function WebcamBubbleOverlay({
+  stream,
+}: {
+  stream: MediaStream | null;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    if (!stream) {
+      el.srcObject = null;
+      return undefined;
+    }
+    el.srcObject = stream;
+    return () => {
+      el.srcObject = null;
+    };
+  }, [stream]);
+
+  if (!stream) return null;
+
+  return (
+    <div className="webcam-bubble" aria-hidden role="presentation">
+      <video
+        ref={ref}
+        className="webcam-bubble__video"
+        autoPlay
+        muted
+        playsInline
+      />
+    </div>
   );
 }
 

@@ -1,9 +1,17 @@
 export type QualityPreset = "low" | "balanced" | "high";
 
+/** Composited into the canvas capture stream (viewport-relative cursor). */
+export type PointerTool = "none" | "laser" | "spotlight" | "ripple";
+
 export type CaptureOptions = {
   quality: QualityPreset;
   /** Overlay webcam Picture-in-Picture on screen via canvas.captureStream */
   webcamPip: boolean;
+  /**
+   * Draw pointer overlays on captured frames (laser dot, spotlight, or click ripples).
+   * Cursor is mapped from this browser tab’s viewport — works best fullscreen or maximized.
+   */
+  pointerTool?: PointerTool;
   /**
    * Seconds to count down **after** the user picks screen/window/tab in the picker,
    * before encoding starts (0 disables).

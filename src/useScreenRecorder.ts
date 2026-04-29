@@ -5,7 +5,7 @@ import {
   constraintsForPreset,
   mimeOrUndefined,
 } from "./recording/presets";
-import { startPIPCompositor } from "./recording/compositor";
+import { startCaptureCompositor } from "./recording/compositor";
 
 export type RecorderState =
   | { status: "idle" }
@@ -24,6 +24,7 @@ export type RecorderState =
 const defaultCaptureOptions: CaptureOptions = {
   quality: "balanced",
   webcamPip: false,
+  pointerTool: "none",
   countdownSeconds: 0,
 };
 
@@ -93,6 +94,11 @@ function mapCaptureError(e: unknown): string {
 
 export function useScreenRecorder() {
   const [state, setState] = useState<RecorderState>({ status: "idle" });
+  const [webcamBubbleStream, setWebcamBubbleStream] =
+    useState<MediaStream | null>(null);
+  /** Same composited encode stream MediaRecorder uses — avoids DOM pointer overlay doubling in-tab */
+  const [compositeLivePreview, setCompositeLivePreview] =
+    useState<MediaStream | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -121,6 +127,8 @@ export function useScreenRecorder() {
   }, []);
 
   const stopInputStreamsOnly = useCallback(() => {
+    setWebcamBubbleStream(null);
+    setCompositeLivePreview(null);
     compositorStopRef.current?.();
     compositorStopRef.current = null;
     stopTracks(webcamStreamRef.current);
@@ -305,6 +313,9 @@ export function useScreenRecorder() {
       }
 
       try {
+        setWebcamBubbleStream(null);
+        setCompositeLivePreview(null);
+
         const constraints = constraintsForPreset(merged.quality);
 
         let displayStream: MediaStream;
@@ -357,6 +368,9 @@ export function useScreenRecorder() {
             webcamStream = null;
           }
           webcamStreamRef.current = webcamStream;
+          if (webcamStream?.getVideoTracks()[0]) {
+            setWebcamBubbleStream(webcamStream);
+          }
         }
 
         const cr = constraints.frameRate;
@@ -366,17 +380,25 @@ export function useScreenRecorder() {
           else if ("max" in cr && typeof cr.max === "number") fps = cr.max;
         }
 
+        const pointerTool = merged.pointerTool ?? "none";
+
         let recordStream: MediaStream;
-        if (
-          merged.webcamPip &&
-          webcamStream &&
-          webcamStream.getVideoTracks()[0]
-        ) {
-          const comp = await startPIPCompositor({
+        const useCompositor =
+          (merged.webcamPip &&
+            webcamStream &&
+            webcamStream.getVideoTracks()[0]) ||
+          pointerTool !== "none";
+
+        if (useCompositor) {
+          const comp = await startCaptureCompositor({
             screenStream: displayStream,
-            webcamStream,
+            webcamStream:
+              merged.webcamPip && webcamStream?.getVideoTracks()[0]
+                ? webcamStream
+                : null,
             micStream,
             frameRate: Math.min(30, Math.max(8, fps)),
+            pointerTool,
           });
           compositorStopRef.current = comp.stop;
           recordStream = comp.outputStream;
@@ -403,6 +425,8 @@ export function useScreenRecorder() {
 
         pendingRecordStreamRef.current = recordStream;
         pendingRecorderOptionsRef.current = recorderOptions;
+
+        setCompositeLivePreview(useCompositor ? recordStream : null);
 
         const countdown = merged.countdownSeconds ?? 0;
         if (countdown > 0) {
@@ -499,6 +523,8 @@ export function useScreenRecorder() {
 
   return {
     state,
+    webcamBubbleStream,
+    compositeLivePreview,
     start,
     stop,
     discard,

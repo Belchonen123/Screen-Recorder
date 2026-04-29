@@ -57,18 +57,6 @@ code {
   margin-inline: auto;
 }
 
-.hint-box {
-  max-width: 720px;
-  margin: 0.75rem auto 0;
-  padding: 0.875rem 1rem;
-  background: rgba(124, 108, 245, 0.12);
-  border: 1px solid rgba(124, 108, 245, 0.35);
-  border-radius: 10px;
-  color: var(--muted);
-  font-size: 0.875rem;
-  text-align: center;
-}
-
 .main {
   max-width: 840px;
   margin: 0 auto;
@@ -174,6 +162,18 @@ code {
   flex-direction: column;
   gap: 1rem;
   margin-top: 1rem;
+}
+
+.preview-video-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.preview-audio-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .preview-video {
@@ -307,6 +307,59 @@ code {
   opacity: 0.95;
 }
 
+.webcam-bubble {
+  position: fixed;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 50;
+  width: min(220px, 30vw);
+  aspect-ratio: 16 / 10;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.88);
+  background: var(--surface);
+  pointer-events: none;
+}
+
+.webcam-bubble__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composite-encode-preview {
+  position: fixed;
+  left: max(14px, env(safe-area-inset-left));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  z-index: 52;
+  width: min(280px, 34vw);
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 36px rgba(0, 0, 0, 0.45);
+  background: var(--surface);
+}
+
+.composite-encode-preview__video {
+  display: block;
+  width: 100%;
+  vertical-align: top;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  background: #000;
+}
+
+.composite-encode-preview__label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--muted);
+  padding: 0.35rem 0.55rem;
+  background: rgba(0, 0, 0, 0.35);
+  border-top: 1px solid var(--border);
+}
+
 .track-pills {
   display: flex;
   flex-wrap: wrap;
@@ -346,22 +399,111 @@ code {
   font-size: 0.8125rem;
 }
 
-.playback-exports {
+.recording-playback {
   margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
-.playback-exports h3 {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
+.trim-panel {
+  margin-top: 0.65rem;
 }
 
-.trim-range .field span {
-  display: block;
-  margin-bottom: 0.2rem;
+.trim-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.45rem;
 }
 
-.trim-range input[type="range"] {
-  width: 100%;
+.trim-panel-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.trim-meta-line {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.trim-help {
+  margin: 0.45rem 0 0;
+}
+
+.trim-track {
+  position: relative;
+  height: 48px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.trim-track__shade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.trim-track__shade--left {
+  left: 0;
+}
+
+.trim-track__shade--right {
+  right: 0;
+}
+
+.trim-track__keep {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 6px;
+  background: rgba(124, 108, 245, 0.28);
+  border: 2px solid var(--accent);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.trim-playhead {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.trim-handle {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 28px;
+  margin-left: -7px;
+  margin-top: -14px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: var(--accent);
+  cursor: ew-resize;
+  z-index: 3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.trim-handle:focus-visible {
+  outline: 2px solid var(--accent-hover);
+}
+
+.playback-actions--below {
+  margin-top: 0;
 }
 
 .playback-actions {

@@ -1,44 +1,173 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { blobToMp4, trimWebBlob } from "./ffmpeg/ffmpegClient";
 
 type Props = {
   blob: Blob;
-  mimeType?: string;
+  previewSrc: string;
+  posterUrl?: string;
+  downloadName: string;
+  onDiscard: () => void;
 };
 
-export function PlaybackExports({ blob }: Props) {
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const frac = Math.round((seconds % 1) * 100);
+  const ss =
+    frac > 0 ? `${s}.${frac.toString().padStart(2, "0")}` : `${s}`;
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, "0")}:${ss.padStart(2, "0")}`;
+  }
+  return `${m}:${ss.padStart(2, "0")}`;
+}
+
+export function PlaybackExports({
+  blob,
+  previewSrc,
+  posterUrl,
+  downloadName,
+  onDiscard,
+}: Props) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+
   const [duration, setDuration] = useState(0);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
   const [startSec, setStartSec] = useState(0);
   const [endSec, setEndSec] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [dragging, setDragging] = useState<"start" | "end" | null>(null);
+
+  /** Sync trim state when blob / URL changes */
+  useEffect(() => {
+    setDuration(0);
+    setCurrentTime(0);
+    setStartSec(0);
+    setEndSec(180);
+    setErr(null);
+  }, [blob, previewSrc]);
 
   useEffect(() => {
-    const url = URL.createObjectURL(blob);
-    const v = document.createElement("video");
-    v.preload = "metadata";
-    v.src = url;
-    const onMeta = (): void => {
-      const d = Number.isFinite(v.duration) ? v.duration : 0;
-      setDuration(d);
-      setStartSec(0);
-      setEndSec(d || 1);
+    const v = videoRef.current;
+    if (!v) return undefined;
+
+    const syncDuration = (): void => {
+      let d = v.duration;
+      if ((!Number.isFinite(d) || d <= 0) && v.seekable?.length) {
+        try {
+          const end = v.seekable.end(v.seekable.length - 1);
+          if (Number.isFinite(end) && end > 0) d = end;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (Number.isFinite(d) && d > 0) {
+        setDuration(d);
+        setEndSec((prev) => Math.min(prev > d ? d : prev, d));
+        setStartSec((prev) => Math.min(prev, d));
+      }
     };
-    const onErr = (): void => {
-      setDuration(10);
-      setStartSec(0);
-      setEndSec(10);
-    };
-    v.addEventListener("loadedmetadata", onMeta);
-    v.addEventListener("error", onErr);
+
+    const onTime = (): void => setCurrentTime(v.currentTime);
+
+    v.addEventListener("loadedmetadata", syncDuration);
+    v.addEventListener("durationchange", syncDuration);
+    v.addEventListener("timeupdate", onTime);
+
+    window.setTimeout(() => {
+      syncDuration();
+      if ((!Number.isFinite(v.duration) || v.duration <= 0) && v.readyState >= 1) {
+        void v
+          .play()
+          .then(() => {
+            v.pause();
+            v.currentTime = 0;
+            syncDuration();
+          })
+          .catch(() => undefined);
+      }
+    }, 50);
+
     return () => {
-      v.removeAttribute("src");
-      v.load();
-      v.removeEventListener("loadedmetadata", onMeta);
-      v.removeEventListener("error", onErr);
-      URL.revokeObjectURL(url);
+      v.removeEventListener("loadedmetadata", syncDuration);
+      v.removeEventListener("durationchange", syncDuration);
+      v.removeEventListener("timeupdate", onTime);
     };
-  }, [blob]);
+  }, [previewSrc]);
+
+  const sliderMax =
+    duration > 0 ? duration : Math.max(endSec, startSec, 300, 60);
+
+  const clientToSec = useCallback(
+    (clientX: number): number => {
+      const el = trackRef.current;
+      if (!el || sliderMax <= 0) return 0;
+      const rect = el.getBoundingClientRect();
+      const ratio = Math.min(
+        1,
+        Math.max(0, (clientX - rect.left) / rect.width),
+      );
+      return ratio * sliderMax;
+    },
+    [sliderMax],
+  );
+
+  useEffect(() => {
+    if (!dragging) return undefined;
+
+    const move = (e: PointerEvent): void => {
+      const t = clientToSec(e.clientX);
+      if (dragging === "start") {
+        setStartSec(Math.min(Math.max(0, t), endSec - 0.15));
+      } else {
+        setEndSec(Math.max(Math.min(sliderMax, t), startSec + 0.15));
+      }
+    };
+
+    const up = (): void => setDragging(null);
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, [dragging, clientToSec, endSec, startSec, sliderMax]);
+
+  const pct = useMemo(() => {
+    const D = sliderMax > 0 ? sliderMax : 1;
+    return {
+      start: (Math.min(startSec, sliderMax) / D) * 100,
+      end: (Math.min(endSec, sliderMax) / D) * 100,
+      play: (Math.min(currentTime, sliderMax) / D) * 100,
+    };
+  }, [startSec, endSec, currentTime, sliderMax]);
+
+  const onTrackPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if ((e.target as HTMLElement).closest(".trim-handle")) return;
+      const v = videoRef.current;
+      const t = clientToSec(e.clientX);
+      if (v && sliderMax > 0) {
+        v.currentTime = Math.min(sliderMax, Math.max(0, t));
+      }
+    },
+    [clientToSec, sliderMax],
+  );
 
   const downloadBlob = useCallback((b: Blob, name: string) => {
     const a = document.createElement("a");
@@ -52,8 +181,9 @@ export function PlaybackExports({ blob }: Props) {
     setBusy("Trimming…");
     setErr(null);
     try {
-      const lo = Math.max(0, Math.min(startSec, endSec, duration || 99999));
-      const hi = Math.max(lo + 0.15, Math.min(duration || lo + 1, Math.max(startSec, endSec)));
+      const cap = sliderMax > 0 ? sliderMax : 86400;
+      const lo = Math.max(0, Math.min(startSec, endSec, cap));
+      const hi = Math.max(lo + 0.15, Math.min(cap, Math.max(startSec, endSec)));
       const trimmed = await trimWebBlob(blob, lo, hi);
       downloadBlob(trimmed, `recording-trim-${Date.now()}.webm`);
     } catch (e) {
@@ -76,51 +206,132 @@ export function PlaybackExports({ blob }: Props) {
     }
   };
 
+  const metaHint =
+    duration > 0 ? (
+      <span className="trim-meta-line">
+        Keep <strong>{formatClock(startSec)}</strong>
+        {" → "}
+        <strong>{formatClock(endSec)}</strong>
+        {" · "}
+        {(endSec - startSec).toFixed(2)}s clip
+      </span>
+    ) : (
+      <span className="trim-meta-line muted small-label">
+        Loading timeline length… drag handles once ready.
+      </span>
+    );
+
   return (
-    <div className="playback-exports card">
-      <h3>Edit &amp; export</h3>
-      <p className="muted tiny">
-        Trimming copies stream segments when possible. MP4 needs H.264 in this ffmpeg wasm
-        bundle—WebM downloads always work in Chromium.
-      </p>
+    <div className="recording-playback">
+      <div className="preview-video-wrap">
+        <video
+          ref={videoRef}
+          src={previewSrc}
+          poster={posterUrl}
+          controls
+          playsInline
+          className="preview-video"
+          preload="metadata"
+        />
 
-      {duration > 0 && (
-        <div className="trim-range">
-          <label className="field">
-            <span>Trim start ({startSec.toFixed(2)} s)</span>
-            <input
-              type="range"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={startSec}
-              onChange={(e) => setStartSec(Number.parseFloat(e.target.value))}
+        <div className="trim-panel">
+          <div className="trim-panel-head">
+            <span className="trim-panel-title">Trim clip</span>
+            {metaHint}
+          </div>
+
+          <div
+            ref={trackRef}
+            className="trim-track"
+            onPointerDown={onTrackPointerDown}
+          >
+            <div
+              className="trim-track__shade trim-track__shade--left"
+              style={{ width: `${pct.start}%` }}
             />
-          </label>
-          <label className="field">
-            <span>Trim end ({endSec.toFixed(2)} s)</span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 1}
-              step={0.1}
-              value={endSec}
-              onChange={(e) => setEndSec(Number.parseFloat(e.target.value))}
+            <div
+              className="trim-track__shade trim-track__shade--right"
+              style={{ width: `${100 - pct.end}%` }}
             />
-          </label>
+            <div
+              className="trim-track__keep"
+              style={{
+                left: `${pct.start}%`,
+                width: `${pct.end - pct.start}%`,
+              }}
+            />
+            <div
+              className="trim-playhead"
+              style={{ left: `${pct.play}%` }}
+              aria-hidden
+            />
+            <button
+              type="button"
+              className="trim-handle trim-handle--start"
+              style={{ left: `${pct.start}%` }}
+              aria-label="Trim start handle"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                setDragging("start");
+              }}
+            />
+            <button
+              type="button"
+              className="trim-handle trim-handle--end"
+              style={{ left: `${pct.end}%` }}
+              aria-label="Trim end handle"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                setDragging("end");
+              }}
+            />
+          </div>
+
+          <p className="muted tiny trim-help">
+            Purple band is what you keep. Drag handles — click the bar to seek.
+          </p>
         </div>
-      )}
 
-      <div className="playback-actions">
-        <button type="button" className="btn secondary small" disabled={!!busy} onClick={() => void onTrimExport()}>
+        <p className="muted tiny preview-audio-hint">
+          <strong>Speaker crossed out?</strong> Click it on the player to hear audio.
+        </p>
+      </div>
+
+      <div className="actions">
+        <a href={previewSrc} download={downloadName} className="btn primary">
+          Download WebM
+        </a>
+        <button type="button" className="btn ghost" onClick={onDiscard}>
+          Discard
+        </button>
+      </div>
+
+      <div className="playback-actions playback-actions--below">
+        <button
+          type="button"
+          className="btn secondary small"
+          disabled={!!busy}
+          onClick={() => void onTrimExport()}
+        >
           {busy === "Trimming…" ? busy : "Export trimmed WebM"}
         </button>
-        <button type="button" className="btn ghost small" disabled={!!busy} onClick={() => void onMp4()}>
+        <button
+          type="button"
+          className="btn ghost small"
+          disabled={!!busy}
+          onClick={() => void onMp4()}
+        >
           {busy === "Encoding MP4…" ? busy : "Export MP4"}
         </button>
       </div>
 
-      {busy && busy !== "Trimming…" && busy !== "Encoding MP4…" ? <p className="muted">{busy}</p> : null}
+      {busy && busy !== "Trimming…" && busy !== "Encoding MP4…" ? (
+        <p className="muted">{busy}</p>
+      ) : null}
       {err ? <p className="error-msg">{err}</p> : null}
     </div>
   );
